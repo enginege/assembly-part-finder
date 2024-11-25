@@ -1,0 +1,35 @@
+# Dataset directory
+dataset/
+data/
+saved_models/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.env/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model checkpoints and results
+retrieval_results/
+*.pth
+*.pkl
+
+# System files
+.DS_Store
+Thumbs.db
