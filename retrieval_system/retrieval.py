@@ -269,6 +269,13 @@ class RetrievalSystem:
 
         return results
 
+    def compute_embeddings(self, image_tensor):
+        """Compute embeddings for an image tensor"""
+        with torch.no_grad():
+            if image_tensor.dim() == 3:
+                image_tensor = image_tensor.unsqueeze(0)
+            return self.model.encode_assembly(image_tensor.to(self.device)).cpu()
+
 def visualize_results(query_image_path, results, data_dir, num_results=5):
     """Visualize query image and top retrieved results"""
     num_images = min(num_results + 1, len(results) + 1)

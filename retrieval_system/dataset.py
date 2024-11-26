@@ -7,15 +7,15 @@ from torchvision import transforms
 from torch_geometric.data import Data
 
 class AssemblyDataset(Dataset):
-    def __init__(self, root_dir, transform=None, cache_images=False):
+    def __init__(self, root_dir, transform=None, cache_embeddings=False):
         self.root_dir = root_dir
         self.transform = transform or transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        self.cache_images = cache_images
-        self.image_cache = {} if cache_images else None
+        self.cache_embeddings = cache_embeddings
+        self.embedding_cache = {} if cache_embeddings else None
 
         # Initialize lists to store paths and IDs
         self.assembly_ids = []  # Initialize first
@@ -113,15 +113,15 @@ class AssemblyDataset(Dataset):
         try:
             assembly_id = self.assembly_ids[idx]
 
-            # Check cache first
-            if self.cache_images and idx in self.image_cache:
-                return self.image_cache[idx]
+            # Check embedding cache first
+            if self.cache_embeddings and idx in self.embedding_cache:
+                return self.embedding_cache[idx]
 
-            # Load assembly image
+            # Load and process images
             assembly_image = Image.open(self.assembly_images[idx]).convert('RGB')
             assembly_image = self.transform(assembly_image)
 
-            # Load part images and convert to tensor immediately
+            # Load part images
             part_images = []
             for part_path in self.part_images[idx]:
                 part_img = Image.open(part_path).convert('RGB')
@@ -139,11 +139,10 @@ class AssemblyDataset(Dataset):
             }
 
             # Cache the result if enabled
-            if self.cache_images:
-                self.image_cache[idx] = result
+            if self.cache_embeddings:
+                self.embedding_cache[idx] = result
 
             return result
-
         except Exception as e:
             print(f"Error loading assembly {idx}: {str(e)}")
             raise
