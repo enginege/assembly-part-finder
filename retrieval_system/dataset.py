@@ -7,13 +7,15 @@ from torchvision import transforms
 from torch_geometric.data import Data
 
 class AssemblyDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, transform=None, cache_images=False):
         self.root_dir = root_dir
         self.transform = transform or transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        self.cache_images = cache_images
+        self.image_cache = {} if cache_images else None
 
         # Initialize lists to store paths and IDs
         self.assembly_ids = []  # Initialize first
@@ -111,6 +113,10 @@ class AssemblyDataset(Dataset):
         try:
             assembly_id = self.assembly_ids[idx]
 
+            # Check cache first
+            if self.cache_images and idx in self.image_cache:
+                return self.image_cache[idx]
+
             # Load assembly image
             assembly_image = Image.open(self.assembly_images[idx]).convert('RGB')
             assembly_image = self.transform(assembly_image)
@@ -125,12 +131,18 @@ class AssemblyDataset(Dataset):
             # Load graph
             graph = self.load_graph(self.graph_paths[idx])
 
-            return {
+            result = {
                 'assembly_image': assembly_image,
                 'part_images': part_images,
                 'graph': graph,
                 'assembly_id': assembly_id
             }
+
+            # Cache the result if enabled
+            if self.cache_images:
+                self.image_cache[idx] = result
+
+            return result
 
         except Exception as e:
             print(f"Error loading assembly {idx}: {str(e)}")

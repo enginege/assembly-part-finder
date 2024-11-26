@@ -199,8 +199,8 @@ def main():
 
             print(f"Loading dataset from {args.data_dir}")  # Debug print
             # Create dataset
-            dataset = AssemblyDataset(args.data_dir)
-
+            dataset = AssemblyDataset(args.data_dir, cache_images=True)
+            print(f"Dataset loaded with {len(dataset)} samples")  # Debug print
             # Split into train and validation sets
             train_size = int(0.8 * len(dataset))
             val_size = len(dataset) - train_size
