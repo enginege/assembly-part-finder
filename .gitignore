@@ -1,6 +1,7 @@
 # Dataset directory
 dataset/
 data/
+sample/
 saved_models/
 
 # Python cache files

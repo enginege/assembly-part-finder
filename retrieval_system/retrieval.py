@@ -9,7 +9,7 @@ from PIL import Image
 from torchvision import transforms
 import os
 import matplotlib.pyplot as plt
-from .visualization import visualize_part_query_results
+from .visualization import visualize_part_query_results, get_assembly_id_from_path
 
 class RetrievalSystem:
     def __init__(self, model, device):
@@ -19,6 +19,7 @@ class RetrievalSystem:
         self.part_embeddings = []
         self.graph_embeddings = []
         self.assembly_ids = []
+        self.part_names = []
 
     def process_graphs(self, graphs):
         """Process a list of graphs"""
@@ -51,6 +52,7 @@ class RetrievalSystem:
         part_embeddings_list = []
         graph_embeddings_list = []
         assembly_ids_list = []
+        part_names_list = []
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Processing assemblies"):
@@ -63,11 +65,20 @@ class RetrievalSystem:
                 graph_embeddings = self.process_graphs(batch['graph'])
                 graph_embeddings_list.append(graph_embeddings.cpu())
 
-                # Process parts
-                for parts in batch['part_images']:
+                # Process parts and store names
+                for assembly_id, parts in zip(batch['assembly_id'], batch['part_images']):
                     parts = parts.to(self.device)
                     part_embeddings = self.model.encode_part(parts)
                     part_embeddings_list.append(part_embeddings.cpu())
+
+                    # Get part names from the image paths if available
+                    if 'part_paths' in batch:
+                        part_paths = batch['part_paths']
+                        names = [os.path.splitext(os.path.basename(path))[0] for path in part_paths]
+                    else:
+                        # Fallback to generic names
+                        names = [f'Part_{i}' for i in range(len(parts))]
+                    part_names_list.extend(names)
 
                 assembly_ids_list.extend(batch['assembly_id'])
 
@@ -76,6 +87,7 @@ class RetrievalSystem:
         self.graph_embeddings = torch.cat(graph_embeddings_list, dim=0)
         self.part_embeddings = part_embeddings_list
         self.assembly_ids = assembly_ids_list
+        self.part_names = part_names_list
 
         print(f"Index built with {len(self.assembly_ids)} assemblies")
 
@@ -113,7 +125,8 @@ class RetrievalSystem:
                 'assembly_embeddings': self.assembly_embeddings,
                 'part_embeddings': self.part_embeddings,
                 'graph_embeddings': self.graph_embeddings,
-                'assembly_ids': self.assembly_ids
+                'assembly_ids': self.assembly_ids,
+                'part_names': self.part_names
             }, f)
         print(f"Index saved to {path}")
 
@@ -125,9 +138,10 @@ class RetrievalSystem:
             self.part_embeddings = data['part_embeddings']
             self.graph_embeddings = data['graph_embeddings']
             self.assembly_ids = data['assembly_ids']
+            self.part_names = data['part_names']
         print(f"Index loaded from {path}")
 
-    def retrieve_by_assembly(self, query_image, k=5):
+    def retrieve_by_assembly(self, query_image, k=10):
         """Retrieve similar assemblies using an assembly image"""
         self.model.eval()
         with torch.no_grad():
@@ -169,20 +183,24 @@ class RetrievalSystem:
 
         return f'Part {part_idx}'  # Fallback name if something goes wrong
 
-    def retrieve_by_part(self, query_image, k=5, similarity_threshold=0.8, data_dir=None):
-        """Retrieve similar parts from all assemblies, including multiple parts from same assembly"""
+    def retrieve_by_part(self, query_image, query_image_path, k=10, exclude_query_assembly=False,
+                        max_parts_per_assembly=2, similarity_threshold=0.8, data_dir=None):
+        """Retrieve similar parts from assemblies"""
+        if not data_dir:
+            raise ValueError("data_dir must be provided for part retrieval")
+
+        query_id = get_assembly_id_from_path(query_image_path)
         self.model.eval()
         with torch.no_grad():
-            # Add batch dimension to query image
             query_img = query_image.unsqueeze(0).to(self.device)
             query_embedding = self.model.encode_part(query_img)
 
-            # Store all part similarities
             all_part_similarities = []
 
             for assembly_id, part_embeddings in zip(self.assembly_ids, self.part_embeddings):
-                if not torch.is_tensor(part_embeddings):
-                    part_embeddings = torch.tensor(part_embeddings).to(self.device)
+                # Skip if we're excluding the query assembly
+                if exclude_query_assembly and str(assembly_id) == str(query_id):
+                    continue
 
                 # Compare with all parts in this assembly
                 similarities = F.cosine_similarity(
@@ -191,11 +209,25 @@ class RetrievalSystem:
                     dim=1
                 )
 
-                # Get all parts above threshold
+                # Get parts directory for this assembly
+                assembly_dir = os.path.join(data_dir, str(assembly_id), 'images')
+                if not os.path.exists(assembly_dir):
+                    continue
+
+                # Get actual part files
+                part_files = [f for f in os.listdir(assembly_dir)
+                             if not (f.endswith('full_assembly.png') or f == 'SOLID.png')]
+                part_files.sort()
+
+                # Only process parts that actually exist
                 for part_idx, similarity in enumerate(similarities):
+                    if part_idx >= len(part_files):
+                        break
+
                     similarity = similarity.item()
                     if similarity > similarity_threshold:
-                        part_name = self.get_part_name(assembly_id, part_idx, data_dir) if data_dir else f'Part {part_idx}'
+                        part_name = os.path.splitext(part_files[part_idx])[0]
+
                         all_part_similarities.append({
                             'assembly_id': str(assembly_id),
                             'similarity': similarity,
@@ -203,12 +235,26 @@ class RetrievalSystem:
                             'part_name': part_name
                         })
 
-            # Sort all parts by similarity
-            sorted_results = sorted(all_part_similarities,
-                                 key=lambda x: x['similarity'],
-                                 reverse=True)
+            # Sort by similarity and limit results
+            all_part_similarities.sort(key=lambda x: x['similarity'], reverse=True)
 
-            return sorted_results[:k]
+            # Limit the number of parts returned from each assembly
+            limited_results = []
+            assembly_count = {}
+
+            for result in all_part_similarities:
+                assembly_id = result['assembly_id']
+                if assembly_id not in assembly_count:
+                    assembly_count[assembly_id] = 0
+
+                if assembly_count[assembly_id] < max_parts_per_assembly:
+                    limited_results.append(result)
+                    assembly_count[assembly_id] += 1
+
+                if len(limited_results) >= k:
+                    break
+
+            return limited_results[:k]
 
     def _get_top_k_results(self, similarities, k):
         """Helper function to get top-k results"""
@@ -269,7 +315,8 @@ def visualize_results(query_image_path, results, data_dir, num_results=5):
     print(f"\nVisualization saved to {save_path}")
     plt.close()
 
-def query_system(retrieval_system, image_path, query_type='assembly', k=10, data_dir=None):
+def query_system(retrieval_system, image_path, query_type='assembly', k=10,
+                data_dir=None, exclude_query_assembly=False, max_parts_per_assembly=5):
     """Query the system with either an assembly or part image"""
     try:
         image = Image.open(image_path).convert('RGB')
@@ -288,7 +335,14 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10, data
         if query_type == 'assembly':
             results = retrieval_system.retrieve_by_assembly(query_image, k=k)
         else:  # part
-            results = retrieval_system.retrieve_by_part(query_image, k=k)
+            results = retrieval_system.retrieve_by_part(
+                query_image,
+                image_path,
+                k=k,
+                exclude_query_assembly=exclude_query_assembly,
+                max_parts_per_assembly=max_parts_per_assembly,
+                data_dir=data_dir
+            )
 
         print("\nRetrieval Results:")
         print("-" * 80)

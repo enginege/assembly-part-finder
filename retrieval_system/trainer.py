@@ -5,15 +5,45 @@ import logging
 import numpy as np
 from .losses import TripletLoss, ContrastiveLoss
 from torch_geometric.data import Data
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torchmetrics import Accuracy, Precision, Recall
+from torch.cuda.amp import autocast, GradScaler
+import os
+
+class EarlyStopping:
+    def __init__(self, patience=7, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
 
 class ModelTrainer:
     def __init__(self, model, device, learning_rate=1e-4, part_batch_size=16):
         self.model = model
         self.device = device
         self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=3, factor=0.5)
         self.triplet_loss = TripletLoss().to(device)
         self.contrastive_loss = ContrastiveLoss().to(device)
         self.part_batch_size = part_batch_size
+        self.early_stopping = EarlyStopping(patience=7)
+        self.metrics = {
+            'accuracy': Accuracy(task="binary").to(device),
+            'precision': Precision(task="binary").to(device),
+            'recall': Recall(task="binary").to(device)
+        }
 
     def process_parts_in_batches(self, part_images):
         """Process part images in smaller batches to avoid OOM"""
@@ -65,10 +95,9 @@ class ModelTrainer:
         edge_index = torch.tensor([[0], [0]], dtype=torch.long)
         return Data(x=node_features, edge_index=edge_index)
 
-    def train_epoch(self, dataloader):
+    def train_epoch(self, dataloader, scaler):
         self.model.train()
         total_loss = 0
-        scaler = torch.cuda.amp.GradScaler()
 
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training")):
             # Print batch information
@@ -145,46 +174,71 @@ class ModelTrainer:
 
         return total_loss / len(dataloader)
 
-    def train(self, train_loader, epochs):
-        print(f"\nStarting training for {epochs} epochs...")
-        print(f"Training with {len(train_loader.dataset)} assemblies")
-        print("-" * 60)
+    def compute_metrics(self, embeddings, labels):
+        """Compute accuracy, precision, and recall for embeddings"""
+        similarities = torch.matmul(embeddings, embeddings.t())
+        predictions = (similarities > 0.5).float()
 
-        for epoch in range(epochs):
-            self.model.train()
-            total_loss = 0
-            num_batches = len(train_loader)
+        metrics = {}
+        for name, metric in self.metrics.items():
+            metrics[name] = metric(predictions, labels)
+        return metrics
 
-            progress_bar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{epochs}')
+    def validate(self, val_loader):
+        """Validate the model on the validation set"""
+        self.model.eval()
+        total_val_loss = 0
 
-            for batch_idx, batch in enumerate(progress_bar):
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validating"):
                 try:
                     # Move data to device
                     assembly_images = batch['assembly_image'].to(self.device)
                     part_images = batch['part_images'].to(self.device)
                     graphs = [g.to(self.device) for g in batch['graph']]
 
-                    # Zero gradients
-                    self.optimizer.zero_grad()
-
-                    # Forward pass
+                    # Compute loss
                     loss = self.model.compute_loss(assembly_images, part_images, graphs)
+                    total_val_loss += loss.item()
 
-                    # Backward pass
-                    loss.backward()
-                    self.optimizer.step()
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        print(f"\nOOM error during validation. Skipping batch...")
+                        torch.cuda.empty_cache()
+                        continue
+                    else:
+                        raise e
 
-                    # Update statistics
-                    total_loss += loss.item()
-                    avg_loss = total_loss / (batch_idx + 1)
+        return total_val_loss / len(val_loader)
 
-                    # Update progress bar
-                    progress_bar.set_postfix({
-                        'loss': f'{avg_loss:.4f}',
-                        'batch': f'{batch_idx + 1}/{num_batches}'
-                    })
+    def train(self, train_loader, val_loader, epochs):
+        print(f"\nStarting training for {epochs} epochs...")
+        scaler = GradScaler()
+        best_val_loss = float('inf')
 
-                except Exception as e:
-                    print(f"\nError in batch {batch_idx}: {str(e)}")
-                    print("Batch keys:", batch.keys())
-                    continue
+        for epoch in range(epochs):
+            # Training phase
+            train_loss = self.train_epoch(train_loader, scaler)
+
+            # Validation phase
+            val_loss = self.validate(val_loader)
+
+            # Learning rate scheduling
+            self.scheduler.step(val_loss)
+
+            # Early stopping check
+            self.early_stopping(val_loss)
+
+            print(f"Epoch {epoch+1}/{epochs}")
+            print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+
+            # Save best model
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model_path = os.path.join("saved_models", "best_model.pth")
+                torch.save(self.model.state_dict(), best_model_path)
+
+            if self.early_stopping.early_stop:
+                print("Early stopping triggered")
+                break

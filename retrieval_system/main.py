@@ -85,33 +85,23 @@ def save_model(model, save_dir="./saved_models"):
     print(f"\nModel saved to {save_path}")
 
 def load_model(device):
-    """Load the model with its configuration"""
-    model_path = "./saved_models/retrieval_model.pth"
-
+    """Load the trained model"""
+    model_path = os.path.join("./saved_models", "retrieval_model.pth")
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found at {model_path}")
+        raise FileNotFoundError(f"No model found at {model_path}")
 
-    try:
-        checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device)
+    embedding_dim = checkpoint['model_config']['embedding_dim']
 
-        # Check if it's an old format (just state dict) or new format (with config)
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            model = RetrievalModel(embedding_dim=checkpoint['embedding_dim'])
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            # Default configuration for backward compatibility
-            model = RetrievalModel(embedding_dim=256)
-            model.load_state_dict(checkpoint)
+    model = RetrievalModel(embedding_dim).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
 
-        model = model.to(device)
-        model.eval()  # Set to evaluation mode
-        return model
+    print(f"\nModel loaded from {model_path}")
+    return model
 
-    except Exception as e:
-        print(f"Error loading model: {str(e)}")
-        raise
-
-def query_system(retrieval_system, image_path, query_type='assembly', k=10, data_dir=None):
+def query_system(retrieval_system, image_path, query_type='assembly', k=10,
+                data_dir=None, exclude_query_assembly=False, max_parts_per_assembly=2):
     try:
         image = Image.open(image_path).convert('RGB')
         transform = transforms.Compose([
@@ -129,7 +119,14 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10, data
         if query_type == 'assembly':
             results = retrieval_system.retrieve_by_assembly(query_image, k=k)
         else:  # part
-            results = retrieval_system.retrieve_by_part(query_image, k=k, data_dir=data_dir)
+            results = retrieval_system.retrieve_by_part(
+                query_image,
+                image_path,
+                k=k,
+                exclude_query_assembly=exclude_query_assembly,
+                max_parts_per_assembly=max_parts_per_assembly,
+                data_dir=data_dir
+            )
 
         print("\nRetrieval Results:")
         print("-" * 80)
@@ -169,16 +166,22 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10, data
         raise
 
 def main():
-    parser = argparse.ArgumentParser(description='Assembly Retrieval System')
-    parser.add_argument('--data_dir', type=str, help='Path to dataset directory')
-    parser.add_argument('--mode', type=str, choices=['train', 'query'], required=True)
-    parser.add_argument('--query_image', type=str, help='Path to query image')
-    parser.add_argument('--query_type', type=str, choices=['assembly', 'part'])
-    parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser = argparse.ArgumentParser(description="Assembly Part Finder")
+    parser.add_argument('--mode', type=str, choices=['train', 'query'], required=True, help='Mode to run the system')
+    parser.add_argument('--query_image', type=str, help='Path to the query image (for query mode)')
+    parser.add_argument('--query_type', type=str, choices=['assembly', 'part'], default='assembly', help='Type of query')
+    parser.add_argument('--batch_size', type=int, default=2, help='Batch size for training')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--max_parts_per_assembly', type=int, default=2, help='Maximum number of parts to retrieve from each assembly')
+    parser.add_argument('--exclude_query_assembly', default=False, action='store_true',
+                       help='Exclude parts from the same assembly as the query')
+    parser.add_argument('--data_dir', type=str, help='Path to the dataset directory (required for training)')
 
     args = parser.parse_args()
-    print("Arguments parsed:", args)  # Debug print
+
+    # Validate arguments based on mode
+    if args.mode == 'train' and not args.data_dir:
+        parser.error("Training mode requires --data_dir argument")
 
     # Set up device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -186,19 +189,37 @@ def main():
 
     try:
         if args.mode == 'train':
-            print("Starting training mode...")  # Debug print
+            print("Starting training mode...")
+
+            # Create saved_models directory at the start
+            os.makedirs("./saved_models", exist_ok=True)
+
             if not args.data_dir:
                 raise ValueError("Training mode requires --data_dir argument")
 
             print(f"Loading dataset from {args.data_dir}")  # Debug print
             # Create dataset
             dataset = AssemblyDataset(args.data_dir)
+
+            # Split into train and validation sets
+            train_size = int(0.8 * len(dataset))
+            val_size = len(dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
             train_loader = DataLoader(
-                dataset,
+                train_dataset,
                 batch_size=args.batch_size,
                 shuffle=True,
                 collate_fn=custom_collate_fn
             )
+
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                collate_fn=custom_collate_fn
+            )
+
             print(f"Dataset loaded with {len(dataset)} samples")  # Debug print
 
             # Initialize model and trainer
@@ -208,7 +229,7 @@ def main():
 
             print(f"Starting training for {args.epochs} epochs...")  # Debug print
             # Train model
-            trainer.train(train_loader, args.epochs)
+            trainer.train(train_loader, val_loader, args.epochs)
 
             print("\nTraining completed, saving model...")
             save_model(model)  # Use the new save_model function
@@ -238,7 +259,9 @@ def main():
                 retrieval_system,
                 args.query_image,
                 args.query_type,
-                data_dir=data_dir
+                data_dir=data_dir,
+                exclude_query_assembly=args.exclude_query_assembly,
+                max_parts_per_assembly=args.max_parts_per_assembly
             )
 
     except Exception as e:
