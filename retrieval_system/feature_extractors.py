@@ -7,8 +7,8 @@ from torch_geometric.nn import GCNConv, global_mean_pool
 class ImageFeatureExtractor(nn.Module):
     def __init__(self, output_dim=512):
         super().__init__()
-        # Use ResNet18 instead of ResNet50 for lower memory usage
-        self.backbone = models.resnet18(pretrained=True)
+        # Use ResNet18 with proper weights parameter
+        self.backbone = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
 
         # Freeze early layers to save memory
         for param in list(self.backbone.parameters())[:-3]:

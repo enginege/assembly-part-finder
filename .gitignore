@@ -3,6 +3,7 @@ dataset/
 data/
 sample/
 saved_models/
+embedding_cache/
 
 # Python cache files
 __pycache__/
@@ -28,6 +29,7 @@ env/
 
 # Model checkpoints and results
 retrieval_results/
+retrieval_results_small_dataset/
 *.pth
 *.pkl
 

@@ -9,6 +9,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchmetrics import Accuracy, Precision, Recall
 from torch.cuda.amp import autocast, GradScaler
 import os
+from .retrieval import RetrievalSystem
+import gc
 
 class EarlyStopping:
     def __init__(self, patience=7, min_delta=0):
@@ -30,9 +32,10 @@ class EarlyStopping:
             self.counter = 0
 
 class ModelTrainer:
-    def __init__(self, model, device, learning_rate=1e-4, part_batch_size=16):
+    def __init__(self, model, device, learning_rate=1e-4, part_batch_size=16, accumulation_steps=4):
         self.model = model
         self.device = device
+        self.accumulation_steps = accumulation_steps
         self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=3, factor=0.5)
         self.triplet_loss = TripletLoss().to(device)
@@ -98,76 +101,58 @@ class ModelTrainer:
     def train_epoch(self, dataloader, scaler):
         self.model.train()
         total_loss = 0
+        self.optimizer.zero_grad(set_to_none=True)
+
+        # Get dataset's cache manager if it exists
+        cache_manager = getattr(dataloader.dataset, 'cache_manager', None)
+
+        # Add memory cleanup at the start of each epoch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
 
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training")):
-            # Print batch information
-            print(f"\nProcessing batch {batch_idx}")
-            print(f"Assembly IDs in batch: {batch['assembly_id']}")
-            print(f"Number of graphs in batch: {len(batch['graph'])}")
-
-            # Check graph paths
-            if 'graph_path' in batch:
-                print("Graph paths in batch:")
-                for idx, path in enumerate(batch['graph_path']):
-                    print(f"Assembly {batch['assembly_id'][idx]}: {path}")
-
-            torch.cuda.empty_cache()
-
             try:
-                self.optimizer.zero_grad(set_to_none=True)
+                # Let cache manager handle its own memory management
+                if cache_manager:
+                    cache_manager.clear_unused_cache()
 
-                sub_batch_size = 2
-                batch_size = len(batch['assembly_image'])
-                batch_loss = 0
-
-                for sub_idx in range(0, batch_size, sub_batch_size):
-                    end_idx = min(sub_idx + sub_batch_size, batch_size)
-
-                    # Get sub-batch data
-                    assembly_img = batch['assembly_image'][sub_idx:end_idx].to(self.device)
-                    sub_graphs = batch['graph'][sub_idx:end_idx]
-
+                # Move data to device explicitly and clear unnecessary tensors
+                if 'cached_embeddings' in batch:
                     with torch.cuda.amp.autocast():
-                        assembly_embeddings = self.model.encode_assembly(assembly_img)
-                        graph_embeddings = self.process_graphs(sub_graphs)
+                        loss = self.compute_loss_from_cache(batch)
+                else:
+                    # Process batch in smaller chunks
+                    with torch.cuda.amp.autocast():
+                        assembly_img = batch['assembly_image'].to(self.device)
+                        loss = self.model.compute_loss(
+                            assembly_img,
+                            batch['part_images'].to(self.device),
+                            [g.to(self.device) for g in batch['graph']]
+                        )
+                        del assembly_img  # Explicitly delete unnecessary tensors
 
-                        sub_loss = 0
-                        for i in range(len(assembly_img)):
-                            parts = batch['part_images'][sub_idx + i].to(self.device)
-                            part_embeddings = self.process_parts_in_batches(parts)
-                            part_embeddings = part_embeddings.to(self.device)
+                # Scale loss and backward pass
+                loss = loss / self.accumulation_steps
+                scaler.scale(loss).backward()
 
-                            triplet_loss = self.triplet_loss(
-                                assembly_embeddings[i].unsqueeze(0),
-                                part_embeddings,
-                                torch.roll(part_embeddings, 1, 0)
-                            )
+                if (batch_idx + 1) % self.accumulation_steps == 0:
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    self.optimizer.zero_grad(set_to_none=True)
 
-                            graph_emb = graph_embeddings[i].view(1, -1).expand(len(part_embeddings), -1)
-                            contrastive_loss = self.contrastive_loss(
-                                part_embeddings,
-                                graph_emb,
-                                torch.arange(len(part_embeddings)).to(self.device)
-                            )
+                    # Clear cache periodically
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
-                            sub_loss += (triplet_loss + contrastive_loss) / len(assembly_img)
-
-                    batch_loss += sub_loss.item()
-                    scaler.scale(sub_loss).backward()
-
-                    del assembly_embeddings, graph_embeddings, part_embeddings
-                    torch.cuda.empty_cache()
-
-                scaler.step(self.optimizer)
-                scaler.update()
-
-                total_loss += batch_loss
+                total_loss += loss.item() * self.accumulation_steps
 
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     print(f"OOM error in batch {batch_idx}. Skipping...")
-                    if hasattr(torch.cuda, 'empty_cache'):
+                    if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                        gc.collect()
                     continue
                 else:
                     raise e
@@ -189,9 +174,16 @@ class ModelTrainer:
         self.model.eval()
         total_val_loss = 0
 
+        # Get dataset's cache manager if it exists
+        cache_manager = getattr(val_loader.dataset, 'cache_manager', None)
+
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating"):
                 try:
+                    # Let cache manager handle its own memory management
+                    if cache_manager:
+                        cache_manager.clear_unused_cache()
+
                     # Move data to device
                     assembly_images = batch['assembly_image'].to(self.device)
                     part_images = batch['part_images'].to(self.device)
@@ -233,11 +225,28 @@ class ModelTrainer:
             print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
 
-            # Save best model
+            # Save best model with full configuration and its index
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_model_path = os.path.join("saved_models", "best_model.pth")
-                torch.save(self.model.state_dict(), best_model_path)
+                best_index_path = os.path.join("saved_models", "best_model_index.pkl")
+
+                # Save model
+                checkpoint = {
+                    'model_state_dict': self.model.state_dict(),
+                    'embedding_dim': self.model.embedding_dim,
+                    'model_config': {
+                        'embedding_dim': self.model.embedding_dim
+                    }
+                }
+                torch.save(checkpoint, best_model_path)
+
+                # Build and save index for best model
+                retrieval_system = RetrievalSystem(self.model, self.device)
+                retrieval_system.build_index(train_loader)
+                retrieval_system.save_index(best_index_path)
+
+                print(f"Saved best model and index with validation loss: {val_loss:.4f}")
 
             if self.early_stopping.early_stop:
                 print("Early stopping triggered")

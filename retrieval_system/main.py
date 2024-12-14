@@ -86,19 +86,30 @@ def save_model(model, save_dir="./saved_models"):
 
 def load_model(device):
     """Load the trained model"""
-    model_path = os.path.join("./saved_models", "retrieval_model.pth")
+    if os.path.exists(os.path.join("./saved_models", "best_model.pth")):
+        model_path = os.path.join("./saved_models", "best_model.pth")
+        index_path = os.path.join("./saved_models", "best_model_index.pkl")
+    else:
+        model_path = os.path.join("./saved_models", "retrieval_model.pth")
+        index_path = os.path.join("./saved_models", "retrieval_index.pkl")
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"No model found at {model_path}")
 
     checkpoint = torch.load(model_path, map_location=device)
-    embedding_dim = checkpoint['model_config']['embedding_dim']
+
+    # Handle both old and new checkpoint formats
+    if 'model_config' in checkpoint:
+        embedding_dim = checkpoint['model_config']['embedding_dim']
+    else:
+        embedding_dim = checkpoint.get('embedding_dim', 256)
 
     model = RetrievalModel(embedding_dim).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
     print(f"\nModel loaded from {model_path}")
-    return model
+    return model, index_path
 
 def query_system(retrieval_system, image_path, query_type='assembly', k=10,
                 data_dir=None, exclude_query_assembly=False, max_parts_per_assembly=2):
@@ -199,17 +210,23 @@ def main():
 
             print(f"Loading dataset from {args.data_dir}")  # Debug print
             # Create dataset
-            dataset = AssemblyDataset(args.data_dir, cache_embeddings=True)
-            print(f"Dataset loaded with {len(dataset)} samples")  # Debug print
+            train_dataset = AssemblyDataset(args.data_dir, cache_embeddings=True, is_training=True)
+            val_dataset = AssemblyDataset(args.data_dir, cache_embeddings=True, is_training=False)
+
+            print(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
             # Split into train and validation sets
-            train_size = int(0.8 * len(dataset))
-            val_size = len(dataset) - train_size
-            train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+            train_size = int(0.8 * len(train_dataset))
+            val_size = len(train_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
 
             train_loader = DataLoader(
                 train_dataset,
                 batch_size=args.batch_size,
                 shuffle=True,
+                num_workers=1,  # Reduced from 2
+                pin_memory=False,  # Already false, good
+                persistent_workers=False,  # Changed from True
+                prefetch_factor=None,  # Remove prefetching
                 collate_fn=custom_collate_fn
             )
 
@@ -217,15 +234,19 @@ def main():
                 val_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
+                num_workers=1,  # Reduced from 2
+                pin_memory=False,  # Already false, good
+                persistent_workers=False,  # Changed from True
+                prefetch_factor=None,  # Remove prefetching
                 collate_fn=custom_collate_fn
             )
 
-            print(f"Dataset loaded with {len(dataset)} samples")  # Debug print
+            print(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
 
             # Initialize model and trainer
             print("Initializing model and trainer...")  # Debug print
             model = RetrievalModel(embedding_dim=256).to(device)
-            trainer = ModelTrainer(model, device)
+            trainer = ModelTrainer(model, device, part_batch_size=8)
 
             print(f"Starting training for {args.epochs} epochs...")  # Debug print
             # Train model
@@ -242,14 +263,24 @@ def main():
             index_path = os.path.join("./saved_models", "retrieval_index.pkl")
             retrieval_system.save_index(index_path)
 
+            # Add after model initialization and before training loop
+            print("Precomputing embeddings for training set...")
+            train_dataset.dataset.precompute_embeddings(model)  # Access underlying dataset through random split
+            print("Precomputing embeddings for validation set...")
+            val_dataset.dataset.precompute_embeddings(model)
+
+            # Report cache statistics
+            train_dataset.dataset.report_cache_stats()
+            val_dataset.dataset.report_cache_stats()
+
         elif args.mode == 'query':
             if not args.query_image or not args.query_type:
                 raise ValueError("Query mode requires --query_image and --query_type arguments")
 
             # Load model and index
-            model = load_model(device)  # Use the new load_model function
+            model, index_path = load_model(device)  # Get both model and index path
             retrieval_system = RetrievalSystem(model, device)
-            retrieval_system.load_index("./saved_models/retrieval_index.pkl")
+            retrieval_system.load_index(index_path)
 
             # Get data directory from query image path
             data_dir = os.path.dirname(os.path.dirname(os.path.dirname(args.query_image)))
