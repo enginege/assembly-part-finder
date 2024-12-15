@@ -1,3 +1,4 @@
+import logging
 import matplotlib.pyplot as plt
 from PIL import Image
 import os
@@ -57,7 +58,7 @@ def visualize_results(query_image_path, results, data_dir, num_results=5):
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f'query_{query_id}_results.png')
     plt.savefig(save_path, bbox_inches='tight', dpi=150)
-    print(f"\nVisualization saved to {save_path}")
+    logging.debug(f"\nVisualization saved to {save_path}")
     plt.close()
 
 def visualize_part_query_results(query_image_path, results, data_dir, num_results=10):
@@ -121,5 +122,5 @@ def visualize_part_query_results(query_image_path, results, data_dir, num_result
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f'part_query_{query_id}_results.png')
     plt.savefig(save_path, bbox_inches='tight', dpi=150)
-    print(f"\nVisualization saved to {save_path}")
+    logging.debug(f"\nVisualization saved to {save_path}")
     plt.close()

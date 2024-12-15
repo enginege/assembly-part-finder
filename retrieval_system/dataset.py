@@ -1,3 +1,4 @@
+import logging
 import os
 import torch
 import networkx as nx
@@ -24,8 +25,8 @@ class MemoryAwareCache:
         process_memory = psutil.Process().memory_percent()
 
         if system_memory > self.max_memory_percent or process_memory > self.max_memory_percent:
-            print(f"\nSystem memory usage: {system_memory:.1f}%")
-            print(f"Process memory usage: {process_memory:.1f}%")
+            logging.debug(f"\nSystem memory usage: {system_memory:.1f}%")
+            logging.debug(f"Process memory usage: {process_memory:.1f}%")
         return system_memory > self.max_memory_percent or process_memory > self.max_memory_percent
 
     def _trim_cache(self, cache):
@@ -59,7 +60,7 @@ class MemoryAwareCache:
     def clear_unused_cache(self):
         """Aggressively clear cache when memory usage is high"""
         if self._check_memory():
-            print("\nMemory usage high, clearing 70% of cache...")  # Increased from 30%
+            logging.debug("\nMemory usage high, clearing 70% of cache...")  # Increased from 30%
             items_to_remove = int(len(self.train_cache) * 0.7)
             for _ in range(items_to_remove):
                 self.train_cache.popitem(last=False)
@@ -92,7 +93,7 @@ class AssemblyDataset(Dataset):
         assembly_dirs = [d for d in os.listdir(root_dir)
                        if os.path.isdir(os.path.join(root_dir, d))]
 
-        print("\nSearching for assemblies...")
+        logging.debug("\nSearching for assemblies...")
         for assembly_dir in sorted(assembly_dirs, key=lambda x: int(x) if x.isdigit() else float('inf')):
             try:
                 assembly_id = int(assembly_dir)
@@ -119,23 +120,23 @@ class AssemblyDataset(Dataset):
                             self.part_images.append(sorted(part_imgs))  # Sort part images for consistency
                             self.graph_paths.append(graph_path)
 
-                            print(f"Added assembly {assembly_id}:")
-                            print(f"  Graph path: {graph_path}")
-                            print(f"  Assembly image: {assembly_img}")
-                            print(f"  Number of parts: {len(part_imgs)}")
+                            logging.debug(f"Added assembly {assembly_id}:")
+                            logging.debug(f"  Graph path: {graph_path}")
+                            logging.debug(f"  Assembly image: {assembly_img}")
+                            logging.debug(f"  Number of parts: {len(part_imgs)}")
 
             except ValueError:
                 continue
 
-        print(f"\nDataset Loading Summary:")
-        print(f"Total assemblies loaded: {len(self.assembly_ids)}")
+        logging.debug(f"\nDataset Loading Summary:")
+        logging.debug(f"Total assemblies loaded: {len(self.assembly_ids)}")
 
     def load_graph(self, graph_path):
         """Load and process graph from graphml file"""
         try:
-            print(f"\nAttempting to load graph from: {graph_path}")
+            logging.debug(f"\nAttempting to load graph from: {graph_path}")
             G = nx.read_graphml(graph_path)
-            print(f"Loading graph from: {graph_path}")
+            logging.debug(f"Loading graph from: {graph_path}")
 
             # Create a mapping of node names to integers
             node_mapping = {node: idx for idx, node in enumerate(G.nodes())}
@@ -160,11 +161,11 @@ class AssemblyDataset(Dataset):
             x = torch.ones(num_nodes, 1, dtype=torch.float32)  # Explicitly set dtype
 
             data = Data(x=x, edge_index=edge_index.long())  # Ensure long dtype for indices
-            print(f"Successfully loaded graph with {num_nodes} nodes and {len(G.edges())} edges\n")
+            logging.debug(f"Successfully loaded graph with {num_nodes} nodes and {len(G.edges())} edges\n")
             return data
 
         except Exception as e:
-            print(f"Error loading graph {graph_path}: {str(e)}")
+            logging.debug(f"Error loading graph {graph_path}: {str(e)}")
             # Return a minimal valid graph with self-loop
             return Data(
                 x=torch.ones(1, 1, dtype=torch.float32),
@@ -207,7 +208,7 @@ class AssemblyDataset(Dataset):
 
             return result
         except Exception as e:
-            print(f"Error loading assembly {idx}: {str(e)}")
+            logging.debug(f"Error loading assembly {idx}: {str(e)}")
             raise
 
     def clear_cache(self):
@@ -217,7 +218,7 @@ class AssemblyDataset(Dataset):
 
     def precompute_embeddings(self, model):
         """Precompute embeddings for all images and graphs"""
-        print("\nPrecomputing embeddings...")
+        logging.debug("\nPrecomputing embeddings...")
         model.eval()
         with torch.no_grad():
             for idx in tqdm(range(len(self))):
@@ -266,10 +267,10 @@ class AssemblyDataset(Dataset):
             total = self.cache_manager.cache_stats['hits'] + self.cache_manager.cache_stats['misses']
             if total > 0:
                 hit_rate = self.cache_manager.cache_stats['hits'] / total * 100
-                print(f"\nCache Statistics:")
-                print(f"Hits: {self.cache_manager.cache_stats['hits']}")
-                print(f"Misses: {self.cache_manager.cache_stats['misses']}")
-                print(f"Hit Rate: {hit_rate:.2f}%")
+                logging.debug(f"\nCache Statistics:")
+                logging.debug(f"Hits: {self.cache_manager.cache_stats['hits']}")
+                logging.debug(f"Misses: {self.cache_manager.cache_stats['misses']}")
+                logging.debug(f"Hit Rate: {hit_rate:.2f}%")
 
 def custom_collate_fn(batch):
     """Memory efficient collate function"""

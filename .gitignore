@@ -36,3 +36,4 @@ retrieval_results_small_dataset/
 # System files
 .DS_Store
 Thumbs.db
+*.zip

@@ -41,7 +41,7 @@ class ModelTrainer:
         self.triplet_loss = TripletLoss().to(device)
         self.contrastive_loss = ContrastiveLoss().to(device)
         self.part_batch_size = part_batch_size
-        self.early_stopping = EarlyStopping(patience=7)
+        self.early_stopping = EarlyStopping(patience=5)
         self.metrics = {
             'accuracy': Accuracy(task="binary").to(device),
             'precision': Precision(task="binary").to(device),
@@ -69,7 +69,7 @@ class ModelTrainer:
 
         for idx, graph in enumerate(graphs):
             if graph is None:
-                print(f"\nWarning: Graph {idx} in batch is None!")
+                logging.debug(f"\nWarning: Graph {idx} in batch is None!")
                 # Create a default graph
                 graph = self._create_default_graph().to(self.device)
 
@@ -98,7 +98,7 @@ class ModelTrainer:
         edge_index = torch.tensor([[0], [0]], dtype=torch.long)
         return Data(x=node_features, edge_index=edge_index)
 
-    def train_epoch(self, dataloader, scaler):
+    def train_epoch(self, dataloader, scaler, epoch):
         self.model.train()
         total_loss = 0
         self.optimizer.zero_grad(set_to_none=True)
@@ -111,7 +111,7 @@ class ModelTrainer:
             torch.cuda.empty_cache()
             gc.collect()
 
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training")):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}", leave=True)):
             try:
                 # Let cache manager handle its own memory management
                 if cache_manager:
@@ -149,7 +149,7 @@ class ModelTrainer:
 
             except RuntimeError as e:
                 if "out of memory" in str(e):
-                    print(f"OOM error in batch {batch_idx}. Skipping...")
+                    logging.debug(f"OOM error in batch {batch_idx}. Skipping...")
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         gc.collect()
@@ -195,7 +195,7 @@ class ModelTrainer:
 
                 except RuntimeError as e:
                     if "out of memory" in str(e):
-                        print(f"\nOOM error during validation. Skipping batch...")
+                        logging.debug(f"\nOOM error during validation. Skipping batch...")
                         torch.cuda.empty_cache()
                         continue
                     else:
@@ -204,13 +204,13 @@ class ModelTrainer:
         return total_val_loss / len(val_loader)
 
     def train(self, train_loader, val_loader, epochs):
-        print(f"\nStarting training for {epochs} epochs...")
+        logging.debug(f"\nStarting training for {epochs} epochs...")
         scaler = GradScaler()
         best_val_loss = float('inf')
 
         for epoch in range(epochs):
             # Training phase
-            train_loss = self.train_epoch(train_loader, scaler)
+            train_loss = self.train_epoch(train_loader, scaler, epoch)
 
             # Validation phase
             val_loss = self.validate(val_loader)
@@ -221,9 +221,9 @@ class ModelTrainer:
             # Early stopping check
             self.early_stopping(val_loss)
 
-            print(f"Epoch {epoch+1}/{epochs}")
-            print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-            print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            logging.debug(f"Epoch {epoch+1}/{epochs}")
+            logging.debug(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            logging.debug(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
 
             # Save best model with full configuration and its index
             if val_loss < best_val_loss:
@@ -246,8 +246,8 @@ class ModelTrainer:
                 retrieval_system.build_index(train_loader)
                 retrieval_system.save_index(best_index_path)
 
-                print(f"Saved best model and index with validation loss: {val_loss:.4f}")
+                logging.debug(f"Saved best model and index with validation loss: {val_loss:.4f}")
 
             if self.early_stopping.early_stop:
-                print("Early stopping triggered")
+                logging.debug("Early stopping triggered")
                 break
