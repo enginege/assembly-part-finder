@@ -27,20 +27,20 @@ def check_system_compatibility():
     logging.debug(f"PyTorch version: {torch.__version__}")
 
     if torch.cuda.is_available():
-        logging.debug(f"CUDA available: Yes")
-        logging.debug(f"CUDA version: {torch.version.cuda}")
-        logging.debug(f"GPU device: {torch.cuda.get_device_name(0)}")
+        logging.info(f"CUDA available: Yes")
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        logging.info(f"GPU device: {torch.cuda.get_device_name(0)}")
     else:
-        logging.debug("CUDA available: No")
+        logging.info("CUDA available: No")
 
     try:
         import faiss
         if hasattr(faiss, 'StandardGpuResources'):
-            logging.debug("FAISS-GPU available: Yes")
+            logging.info("FAISS-GPU available: Yes")
         else:
-            logging.debug("FAISS-GPU available: No (CPU version installed)")
+            logging.info("FAISS-GPU available: No (CPU version installed)")
     except ImportError:
-        logging.debug("FAISS not installed")
+        logging.error("FAISS not installed")
         sys.exit(1)
 
 def test_retrieval(retrieval_system, dataset, num_queries=5):
@@ -83,7 +83,7 @@ def save_model(model, save_dir="./saved_models"):
     }
 
     torch.save(checkpoint, save_path)
-    logging.debug(f"\nModel saved to {save_path}")
+    logging.info(f"\nModel saved to {save_path}")
 
 def load_model(device):
     """Load the trained model"""
@@ -109,7 +109,7 @@ def load_model(device):
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    logging.debug(f"\nModel loaded from {model_path}")
+    logging.info(f"\nModel loaded from {model_path}")
     return model, index_path
 
 def query_system(retrieval_system, image_path, query_type='assembly', k=10,
@@ -173,8 +173,8 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
         return results
 
     except Exception as e:
-        logging.debug(f"Error processing query image: {str(e)}")
-        logging.debug(f"Image path: {image_path}")
+        logging.error(f"Error processing query image: {str(e)}")
+        logging.error(f"Error Image path: {image_path}")
         raise
 
 def main():
@@ -242,32 +242,32 @@ def main():
                 collate_fn=custom_collate_fn
             )
 
-            logging.debug(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
+            logging.info(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
 
             # Initialize model and trainer
-            logging.debug("Initializing model and trainer...")  # Debug print
+            logging.info("Initializing model and trainer...")  # Debug print
             model = RetrievalModel(embedding_dim=256).to(device)
             trainer = ModelTrainer(model, device, part_batch_size=2)
 
-            logging.debug(f"Starting training for {args.epochs} epochs...")  # Debug print
+            logging.info(f"Starting training for {args.epochs} epochs...")  # Debug print
             # Train model
             trainer.train(train_loader, val_loader, args.epochs)
 
-            logging.debug("\nTraining completed, saving model...")
-            save_model(model)  # Use the new save_model function
+            logging.info("\nTraining completed, saving model...")
+            #save_model(model)  # Use the new save_model function
 
             # Build and save index
-            logging.debug("\nBuilding retrieval index...")
-            retrieval_system = RetrievalSystem(model, device)
-            retrieval_system.build_index(train_loader)
+            logging.info("\nBuilding retrieval index...")
+            # retrieval_system = RetrievalSystem(model, device)
+            # retrieval_system.build_index(train_loader)
 
-            index_path = os.path.join("./saved_models", "retrieval_index.pkl")
-            retrieval_system.save_index(index_path)
+            # index_path = os.path.join("./saved_models", "retrieval_index.pkl")
+            # retrieval_system.save_index(index_path)
 
             # Add after model initialization and before training loop
-            logging.debug("Precomputing embeddings for training set...")
+            logging.info("Precomputing embeddings for training set...")
             train_dataset.dataset.precompute_embeddings(model)  # Access underlying dataset through random split
-            logging.debug("Precomputing embeddings for validation set...")
+            logging.info("Precomputing embeddings for validation set...")
             val_dataset.dataset.precompute_embeddings(model)
 
             # Report cache statistics
@@ -297,7 +297,7 @@ def main():
             )
 
     except Exception as e:
-        logging.debug(f"\nError occurred: {str(e)}")
+        logging.error(f"\nError occurred: {str(e)}")
         import traceback
         traceback.print_exc()
         return

@@ -60,7 +60,7 @@ class MemoryAwareCache:
     def clear_unused_cache(self):
         """Aggressively clear cache when memory usage is high"""
         if self._check_memory():
-            logging.debug("\nMemory usage high, clearing 70% of cache...")  # Increased from 30%
+            logging.warning("\nMemory usage high, clearing 70% of cache...")  # Increased from 30%
             items_to_remove = int(len(self.train_cache) * 0.7)
             for _ in range(items_to_remove):
                 self.train_cache.popitem(last=False)
@@ -165,7 +165,7 @@ class AssemblyDataset(Dataset):
             return data
 
         except Exception as e:
-            logging.debug(f"Error loading graph {graph_path}: {str(e)}")
+            logging.error(f"Error loading graph {graph_path}: {str(e)}")
             # Return a minimal valid graph with self-loop
             return Data(
                 x=torch.ones(1, 1, dtype=torch.float32),
@@ -208,7 +208,7 @@ class AssemblyDataset(Dataset):
 
             return result
         except Exception as e:
-            logging.debug(f"Error loading assembly {idx}: {str(e)}")
+            logging.error(f"Error loading assembly {idx}: {str(e)}")
             raise
 
     def clear_cache(self):
@@ -236,10 +236,20 @@ class AssemblyDataset(Dataset):
                     part_imgs = sample['part_images'].to(model.device)
                     graph = sample['graph'].to(model.device)
 
-                    # Compute embeddings
-                    assembly_emb = model.encode_assembly(assembly_img)
-                    part_embs = model.encode_part(part_imgs)
-                    graph_emb = model.encode_graph(graph.x, graph.edge_index)
+                    # Enable mixed precision
+                    with torch.amp.autocast('cuda'):
+                        # Compute embeddings
+                        assembly_emb = model.encode_assembly(assembly_img)
+
+                        # Process part images individually or in batches
+                        part_embs_list = []
+                        for part_img in sample['part_images']:
+                            part_img = part_img.unsqueeze(0).to(model.device)
+                            part_emb = model.encode_part(part_img)
+                            part_embs_list.append(part_emb.cpu())
+                        part_embs = torch.cat(part_embs_list, dim=0) if part_embs_list else torch.zeros(0, model.embedding_dim)
+
+                        graph_emb = model.encode_graph(graph.x, graph.edge_index)
 
                     # Clear GPU memory after computing embeddings
                     del assembly_img, part_imgs, graph

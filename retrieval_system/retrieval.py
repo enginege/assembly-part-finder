@@ -98,7 +98,7 @@ class RetrievalSystem:
 
                 except RuntimeError as e:
                     if "out of memory" in str(e):
-                        logging.debug(f"\nOOM error during index building. Skipping batch...")
+                        logging.error(f"\nOOM error during index building. Skipping batch...")
                         torch.cuda.empty_cache()
                         continue
                     else:
@@ -200,7 +200,7 @@ class RetrievalSystem:
                 return os.path.splitext(part_files[part_idx])[0]
 
         except Exception as e:
-            logging.debug(f"Error reading directory {assembly_dir}: {str(e)}")
+            logging.error(f"Error reading directory {assembly_dir}: {str(e)}")
 
         return f'Part {part_idx}'  # Fallback name if something goes wrong
 
@@ -341,7 +341,7 @@ class RetrievalSystem:
 
             return Data(x=x, edge_index=edge_index.long())
         except Exception as e:
-            logging.debug(f"Error loading graph {graph_path}: {str(e)}")
+            logging.error(f"Error loading graph {graph_path}: {str(e)}")
             return Data(
                 x=torch.ones(1, 1, dtype=torch.float32),
                 edge_index=torch.tensor([[0], [0]], dtype=torch.long)
@@ -476,7 +476,7 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
             rank = [str(r['assembly_id']) for r in results].index(query_id) + 1
             logging.debug(f"Query assembly found at rank {rank}")
         else:
-            logging.debug("Query assembly not found in top results")
+            logging.warning("Query assembly not found in top results")
 
         # Visualize results if data_dir is provided
         if data_dir:
@@ -488,6 +488,6 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
         return results
 
     except Exception as e:
-        logging.debug(f"Error processing query image: {str(e)}")
-        logging.debug(f"Image path: {image_path}")
+        logging.error(f"Error processing query image: {str(e)}")
+        logging.error(f"Error Image path: {image_path}")
         raise

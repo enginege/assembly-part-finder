@@ -69,7 +69,7 @@ class ModelTrainer:
 
         for idx, graph in enumerate(graphs):
             if graph is None:
-                logging.debug(f"\nWarning: Graph {idx} in batch is None!")
+                logging.warning(f"\nWarning: Graph {idx} in batch is None!")
                 # Create a default graph
                 graph = self._create_default_graph().to(self.device)
 
@@ -149,7 +149,7 @@ class ModelTrainer:
 
             except RuntimeError as e:
                 if "out of memory" in str(e):
-                    logging.debug(f"OOM error in batch {batch_idx}. Skipping...")
+                    logging.error(f"OOM error in batch {batch_idx}. Skipping...")
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         gc.collect()
@@ -195,7 +195,7 @@ class ModelTrainer:
 
                 except RuntimeError as e:
                     if "out of memory" in str(e):
-                        logging.debug(f"\nOOM error during validation. Skipping batch...")
+                        logging.error(f"\nOOM error during validation. Skipping batch...")
                         torch.cuda.empty_cache()
                         continue
                     else:
@@ -204,7 +204,7 @@ class ModelTrainer:
         return total_val_loss / len(val_loader)
 
     def train(self, train_loader, val_loader, epochs):
-        logging.debug(f"\nStarting training for {epochs} epochs...")
+        logging.info(f"\nStarting training for {epochs} epochs...")
         scaler = GradScaler()
         best_val_loss = float('inf')
 
@@ -221,9 +221,9 @@ class ModelTrainer:
             # Early stopping check
             self.early_stopping(val_loss)
 
-            logging.debug(f"Epoch {epoch+1}/{epochs}")
-            logging.debug(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-            logging.debug(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            logging.info(f"Epoch {epoch+1}/{epochs}")
+            logging.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            logging.info(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
 
             # Save best model with full configuration and its index
             if val_loss < best_val_loss:
@@ -246,8 +246,8 @@ class ModelTrainer:
                 retrieval_system.build_index(train_loader)
                 retrieval_system.save_index(best_index_path)
 
-                logging.debug(f"Saved best model and index with validation loss: {val_loss:.4f}")
+                logging.info(f"Saved best model and index with validation loss: {val_loss:.4f}")
 
             if self.early_stopping.early_stop:
-                logging.debug("Early stopping triggered")
+                logging.info("Early stopping triggered")
                 break
