@@ -1,3 +1,4 @@
+import logging
 import torch
 import argparse
 import platform
@@ -20,31 +21,31 @@ import pickle
 
 def check_system_compatibility():
     """Check and print system information and compatibility"""
-    print("\nSystem Information:")
-    print(f"Python version: {sys.version}")
-    print(f"Platform: {platform.platform()}")
-    print(f"PyTorch version: {torch.__version__}")
+    logging.debug("\nSystem Information:")
+    logging.debug(f"Python version: {sys.version}")
+    logging.debug(f"Platform: {platform.platform()}")
+    logging.debug(f"PyTorch version: {torch.__version__}")
 
     if torch.cuda.is_available():
-        print(f"CUDA available: Yes")
-        print(f"CUDA version: {torch.version.cuda}")
-        print(f"GPU device: {torch.cuda.get_device_name(0)}")
+        logging.info(f"CUDA available: Yes")
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        logging.info(f"GPU device: {torch.cuda.get_device_name(0)}")
     else:
-        print("CUDA available: No")
+        logging.info("CUDA available: No")
 
     try:
         import faiss
         if hasattr(faiss, 'StandardGpuResources'):
-            print("FAISS-GPU available: Yes")
+            logging.info("FAISS-GPU available: Yes")
         else:
-            print("FAISS-GPU available: No (CPU version installed)")
+            logging.info("FAISS-GPU available: No (CPU version installed)")
     except ImportError:
-        print("FAISS not installed")
+        logging.error("FAISS not installed")
         sys.exit(1)
 
 def test_retrieval(retrieval_system, dataset, num_queries=5):
     """Test the retrieval system with random queries"""
-    print("\nTesting retrieval system...")
+    logging.debug("\nTesting retrieval system...")
 
     # Get random indices for testing
     test_indices = np.random.choice(len(dataset), num_queries, replace=False)
@@ -55,17 +56,17 @@ def test_retrieval(retrieval_system, dataset, num_queries=5):
         assembly_id = test_sample['assembly_id']
         query_image = test_sample['assembly_image'].unsqueeze(0)
 
-        print(f"\nQuery assembly ID: {assembly_id}")
-        print(f"Number of parts: {len(test_sample['part_images'])}")
+        logging.debug(f"\nQuery assembly ID: {assembly_id}")
+        logging.debug(f"Number of parts: {len(test_sample['part_images'])}")
 
         # Get retrievals
         results = retrieval_system.retrieve(query_image, k=5)
 
-        print("\nTop 5 similar assemblies:")
+        logging.debug("\nTop 5 similar assemblies:")
         for rank, result in enumerate(results, 1):
-            print(f"Rank {rank}: Assembly {result['assembly_id']} (similarity: {result['similarity']:.4f})")
+            logging.debug(f"Rank {rank}: Assembly {result['assembly_id']} (similarity: {result['similarity']:.4f})")
 
-        print("-" * 50)
+        logging.debug("-" * 50)
 
 def save_model(model, save_dir="./saved_models"):
     """Save the trained model with its configuration"""
@@ -82,7 +83,7 @@ def save_model(model, save_dir="./saved_models"):
     }
 
     torch.save(checkpoint, save_path)
-    print(f"\nModel saved to {save_path}")
+    logging.info(f"\nModel saved to {save_path}")
 
 def load_model(device):
     """Load the trained model"""
@@ -108,7 +109,7 @@ def load_model(device):
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    print(f"\nModel loaded from {model_path}")
+    logging.info(f"\nModel loaded from {model_path}")
     return model, index_path
 
 def query_system(retrieval_system, image_path, query_type='assembly', k=10,
@@ -124,8 +125,8 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
 
         # Get assembly ID from image path
         query_id = get_assembly_id_from_path(image_path)
-        print(f"\nQuerying with {query_type} image: {image_path}")
-        print(f"Query Assembly ID: {query_id}")
+        logging.debug(f"\nQuerying with {query_type} image: {image_path}")
+        logging.debug(f"Query Assembly ID: {query_id}")
 
         if query_type == 'assembly':
             results = retrieval_system.retrieve_by_assembly(query_image, k=k)
@@ -139,28 +140,28 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
                 data_dir=data_dir
             )
 
-        print("\nRetrieval Results:")
-        print("-" * 80)
+        logging.debug("\nRetrieval Results:")
+        logging.debug("-" * 80)
         if query_type == 'assembly':
-            print(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<10}{'Self-Match':<10}")
+            logging.debug(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<10}{'Self-Match':<10}")
         else:
-            print(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<10}{'Part Name':<30}{'Same Assembly':<12}")
-        print("-" * 80)
+            logging.debug(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<10}{'Part Name':<30}{'Same Assembly':<12}")
+        logging.debug("-" * 80)
 
         for rank, result in enumerate(results, 1):
             assembly_id = result['assembly_id']
             if query_type == 'assembly':
                 is_self = "✓" if assembly_id == query_id else ""
-                print(f"{rank:<6}{assembly_id:<12}{result['similarity']:.4f}     {is_self:^10}")
+                logging.debug(f"{rank:<6}{assembly_id:<12}{result['similarity']:.4f}     {is_self:^10}")
             else:
                 is_same_assembly = "✓" if str(assembly_id) == str(query_id) else ""
-                print(f"{rank:<6}{assembly_id:<12}{result['similarity']:.4f}     "
+                logging.debug(f"{rank:<6}{assembly_id:<12}{result['similarity']:.4f}     "
                       f"{result['part_name']:<30}{is_same_assembly:^12}")
 
-        print("\nStatistics:")
+        logging.debug("\nStatistics:")
         similarities = [r['similarity'] for r in results]
-        print(f"Average similarity: {np.mean(similarities):.4f}")
-        print(f"Similarity range: {min(similarities):.4f} - {max(similarities):.4f}")
+        logging.debug(f"Average similarity: {np.mean(similarities):.4f}")
+        logging.debug(f"Similarity range: {min(similarities):.4f} - {max(similarities):.4f}")
 
         # Visualize results if data_dir is provided
         if data_dir:
@@ -172,8 +173,8 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
         return results
 
     except Exception as e:
-        print(f"Error processing query image: {str(e)}")
-        print(f"Image path: {image_path}")
+        logging.error(f"Error processing query image: {str(e)}")
+        logging.error(f"Error Image path: {image_path}")
         raise
 
 def main():
@@ -196,11 +197,11 @@ def main():
 
     # Set up device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")  # Debug print
+    logging.debug(f"Using device: {device}")  # Debug print
 
     try:
         if args.mode == 'train':
-            print("Starting training mode...")
+            logging.debug("Starting training mode...")
 
             # Create saved_models directory at the start
             os.makedirs("./saved_models", exist_ok=True)
@@ -208,12 +209,12 @@ def main():
             if not args.data_dir:
                 raise ValueError("Training mode requires --data_dir argument")
 
-            print(f"Loading dataset from {args.data_dir}")  # Debug print
+            logging.debug(f"Loading dataset from {args.data_dir}")  # Debug print
             # Create dataset
             train_dataset = AssemblyDataset(args.data_dir, cache_embeddings=True, is_training=True)
             val_dataset = AssemblyDataset(args.data_dir, cache_embeddings=True, is_training=False)
 
-            print(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
+            logging.debug(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
             # Split into train and validation sets
             train_size = int(0.8 * len(train_dataset))
             val_size = len(train_dataset) - train_size
@@ -223,7 +224,7 @@ def main():
                 train_dataset,
                 batch_size=args.batch_size,
                 shuffle=True,
-                num_workers=1,  # Reduced from 2
+                num_workers=0,  # Reduced from 2
                 pin_memory=False,  # Already false, good
                 persistent_workers=False,  # Changed from True
                 prefetch_factor=None,  # Remove prefetching
@@ -234,39 +235,39 @@ def main():
                 val_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=1,  # Reduced from 2
+                num_workers=0,  # Reduced from 2
                 pin_memory=False,  # Already false, good
                 persistent_workers=False,  # Changed from True
                 prefetch_factor=None,  # Remove prefetching
                 collate_fn=custom_collate_fn
             )
 
-            print(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
+            logging.info(f"Dataset loaded with {len(train_dataset)} samples")  # Debug print
 
             # Initialize model and trainer
-            print("Initializing model and trainer...")  # Debug print
+            logging.info("Initializing model and trainer...")  # Debug print
             model = RetrievalModel(embedding_dim=256).to(device)
-            trainer = ModelTrainer(model, device, part_batch_size=8)
+            trainer = ModelTrainer(model, device, part_batch_size=2)
 
-            print(f"Starting training for {args.epochs} epochs...")  # Debug print
+            logging.info(f"Starting training for {args.epochs} epochs...")  # Debug print
             # Train model
             trainer.train(train_loader, val_loader, args.epochs)
 
-            print("\nTraining completed, saving model...")
-            save_model(model)  # Use the new save_model function
+            logging.info("\nTraining completed, saving model...")
+            #save_model(model)  # Use the new save_model function
 
             # Build and save index
-            print("\nBuilding retrieval index...")
-            retrieval_system = RetrievalSystem(model, device)
-            retrieval_system.build_index(train_loader)
+            logging.info("\nBuilding retrieval index...")
+            # retrieval_system = RetrievalSystem(model, device)
+            # retrieval_system.build_index(train_loader)
 
-            index_path = os.path.join("./saved_models", "retrieval_index.pkl")
-            retrieval_system.save_index(index_path)
+            # index_path = os.path.join("./saved_models", "retrieval_index.pkl")
+            # retrieval_system.save_index(index_path)
 
             # Add after model initialization and before training loop
-            print("Precomputing embeddings for training set...")
+            logging.info("Precomputing embeddings for training set...")
             train_dataset.dataset.precompute_embeddings(model)  # Access underlying dataset through random split
-            print("Precomputing embeddings for validation set...")
+            logging.info("Precomputing embeddings for validation set...")
             val_dataset.dataset.precompute_embeddings(model)
 
             # Report cache statistics
@@ -296,12 +297,12 @@ def main():
             )
 
     except Exception as e:
-        print(f"\nError occurred: {str(e)}")
+        logging.error(f"\nError occurred: {str(e)}")
         import traceback
         traceback.print_exc()
         return
 
 if __name__ == "__main__":
-    print("Script started")  # Debug print
+    logging.debug("Script started")  # Debug print
     main()
-    print("Script completed")  # Debug print
+    logging.debug("Script completed")  # Debug print

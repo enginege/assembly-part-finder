@@ -1,3 +1,4 @@
+import logging
 import faiss
 import torch
 import torch.nn.functional as F
@@ -48,7 +49,7 @@ class RetrievalSystem:
 
     def build_index(self, dataloader):
         """Build the retrieval index from the dataset"""
-        print("\nBuilding retrieval index...")
+        logging.debug("\nBuilding retrieval index...")
         self.model.eval()
         assembly_embeddings_list = []
         part_embeddings_list = []
@@ -97,7 +98,7 @@ class RetrievalSystem:
 
                 except RuntimeError as e:
                     if "out of memory" in str(e):
-                        print(f"\nOOM error during index building. Skipping batch...")
+                        logging.error(f"\nOOM error during index building. Skipping batch...")
                         torch.cuda.empty_cache()
                         continue
                     else:
@@ -146,7 +147,7 @@ class RetrievalSystem:
                 'assembly_ids': self.assembly_ids,
                 'part_names': self.part_names
             }, f)
-        print(f"Index saved to {path}")
+        logging.debug(f"Index saved to {path}")
 
     def load_index(self, path):
         """Load the index from a file"""
@@ -159,7 +160,7 @@ class RetrievalSystem:
             self.part_embeddings = [torch.tensor(emb).float().to(self.device) for emb in data['part_embeddings']]
             self.assembly_ids = data['assembly_ids']
             self.part_names = data['part_names']
-        print(f"Index loaded from {path}")
+        logging.debug(f"Index loaded from {path}")
 
     def retrieve_by_assembly(self, query_image, k=10):
         """Retrieve similar assemblies using an assembly image"""
@@ -199,7 +200,7 @@ class RetrievalSystem:
                 return os.path.splitext(part_files[part_idx])[0]
 
         except Exception as e:
-            print(f"Error reading directory {assembly_dir}: {str(e)}")
+            logging.error(f"Error reading directory {assembly_dir}: {str(e)}")
 
         return f'Part {part_idx}'  # Fallback name if something goes wrong
 
@@ -340,7 +341,7 @@ class RetrievalSystem:
 
             return Data(x=x, edge_index=edge_index.long())
         except Exception as e:
-            print(f"Error loading graph {graph_path}: {str(e)}")
+            logging.error(f"Error loading graph {graph_path}: {str(e)}")
             return Data(
                 x=torch.ones(1, 1, dtype=torch.float32),
                 edge_index=torch.tensor([[0], [0]], dtype=torch.long)
@@ -409,7 +410,7 @@ def visualize_results(query_image_path, results, data_dir, num_results=5):
     query_id = query_image_path.split(os.sep)[-3]
     save_path = os.path.join(save_dir, f'query_{query_id}_results.png')
     plt.savefig(save_path, bbox_inches='tight', dpi=150)
-    print(f"\nVisualization saved to {save_path}")
+    logging.debug(f"\nVisualization saved to {save_path}")
     plt.close()
 
 def query_system(retrieval_system, image_path, query_type='assembly', k=10,
@@ -426,8 +427,8 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
 
         # Get assembly ID from image path
         query_id = image_path.split(os.sep)[-3]
-        print(f"\nQuerying with {query_type} image: {image_path}")
-        print(f"Query Assembly ID: {query_id}")
+        logging.debug(f"\nQuerying with {query_type} image: {image_path}")
+        logging.debug(f"Query Assembly ID: {query_id}")
 
         if query_type == 'assembly':
             results = retrieval_system.retrieve_by_assembly(query_image, k=k)
@@ -441,22 +442,22 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
                 data_dir=data_dir
             )
 
-        print("\nRetrieval Results:")
-        print("-" * 100)
+        logging.debug("\nRetrieval Results:")
+        logging.debug("-" * 100)
         if query_type == 'part':
-            print(f"{'Rank':<6}{'Assembly ID':<12}{'Combined':<10}{'Part':<10}{'Assembly':<10}{'Graph':<10}{'Part Name':<30}")
-            print("-" * 100)
+            logging.debug(f"{'Rank':<6}{'Assembly ID':<12}{'Combined':<10}{'Part':<10}{'Assembly':<10}{'Graph':<10}{'Part Name':<30}")
+            logging.debug("-" * 100)
 
             for rank, result in enumerate(results, 1):
-                print(f"{rank:<6}{result['assembly_id']:<12}"
+                logging.debug(f"{rank:<6}{result['assembly_id']:<12}"
                       f"{result['similarity']:<10.4f}"
                       f"{result['part_similarity']:<10.4f}"
                       f"{result['assembly_similarity']:<10.4f}"
                       f"{result['graph_similarity']:<10.4f}"
                       f"{result['part_name']:<30}")
         else:
-            print(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<12}{'Part Name':<30}{'Same Assembly':<10}")
-            print("-" * 80)
+            logging.debug(f"{'Rank':<6}{'Assembly ID':<12}{'Similarity':<12}{'Part Name':<30}{'Same Assembly':<10}")
+            logging.debug("-" * 80)
 
             for rank, result in enumerate(results, 1):
                 assembly_id = result['assembly_id']
@@ -464,18 +465,18 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
                 part_name = os.path.basename(image_path) if 'part_name' not in result else result['part_name']
                 is_same_assembly = "✓" if str(assembly_id) == str(query_id) else " "
 
-                print(f"{rank:<6}{assembly_id:<12}{similarity:<12.4f}{part_name:<30}{is_same_assembly:^10}")
+                logging.debug(f"{rank:<6}{assembly_id:<12}{similarity:<12.4f}{part_name:<30}{is_same_assembly:^10}")
 
-        print("\nStatistics:")
+        logging.debug("\nStatistics:")
         similarities = [r['similarity'] for r in results]
-        print(f"Average similarity: {np.mean(similarities):.4f}")
-        print(f"Similarity range: {min(similarities):.4f} - {max(similarities):.4f}")
+        logging.debug(f"Average similarity: {np.mean(similarities):.4f}")
+        logging.debug(f"Similarity range: {min(similarities):.4f} - {max(similarities):.4f}")
 
         if query_id in [str(r['assembly_id']) for r in results]:
             rank = [str(r['assembly_id']) for r in results].index(query_id) + 1
-            print(f"Query assembly found at rank {rank}")
+            logging.debug(f"Query assembly found at rank {rank}")
         else:
-            print("Query assembly not found in top results")
+            logging.warning("Query assembly not found in top results")
 
         # Visualize results if data_dir is provided
         if data_dir:
@@ -487,6 +488,6 @@ def query_system(retrieval_system, image_path, query_type='assembly', k=10,
         return results
 
     except Exception as e:
-        print(f"Error processing query image: {str(e)}")
-        print(f"Image path: {image_path}")
+        logging.error(f"Error processing query image: {str(e)}")
+        logging.error(f"Error Image path: {image_path}")
         raise
