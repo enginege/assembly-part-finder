@@ -1,0 +1,16 @@
+# Core ML libraries
+torch
+torchvision
+torch-geometric
+faiss-cpu
+
+# Data processing and visualization
+numpy
+matplotlib
+networkx
+Pillow
+
+# Utilities
+tqdm
+psutil
+torchmetrics
